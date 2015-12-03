@@ -19,6 +19,7 @@ static float rdt_corruptRate;
 static float rdt_lossRate;
 static ssize_t rdt_window;
 static long rdt_timeout;
+static long rdt_connTimeout;
 
 void error(char *msg)
 {
@@ -63,7 +64,7 @@ int rdt_checkAddrMatch(const struct sockaddr* addrA, const struct sockaddr* addr
      return 0;
 }
 
-int rdt_socket(float corruptRate, float lossRate, ssize_t window, long timeout)
+int rdt_socket(float corruptRate, float lossRate, ssize_t window, long timeout, long connTimeout)
 {
      time_t t;
      srand((unsigned) time(&t));
@@ -76,6 +77,8 @@ int rdt_socket(float corruptRate, float lossRate, ssize_t window, long timeout)
           rdt_window = window;
      if (timeout > 0)
           rdt_timeout = timeout;
+     if (connTimeout > 0)
+          rdt_connTimeout = connTimeout;
      int sock = socket(AF_INET, SOCK_DGRAM, 0);
      fcntl(sock, F_SETFL, O_NONBLOCK);
      return sock;
@@ -106,6 +109,7 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, const struct sockadd
      char* bufC = (char*)buf;
      char* pktBuf[PACKETSIZE];
      struct timeval timeStamp;
+     struct timeval timeStampConn;
      struct timeval timeNow;
      ssize_t result;
      ssize_t sresult;
@@ -123,18 +127,26 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, const struct sockadd
                if (sresult != 1)
                     error("sendto encountered an error while sending DNY packet");
           }
-          else if (result > 0 && pktBuf[0] == PACKET_ACK) //received ACK, update window
+          else if (result == 2 && pktBuf[0] == PACKET_ACK) //received ACK, update window
           {
                int reqNum = pktBuf[1];
                fprintf(stderr, "sendto got ack # %d; current packet # is %d; current base is %d\n", reqNum, packetNum, seqNumBack);
                if (mod256LessThan(seqNumBack, reqNum))
                {
                     gettimeofday(&timeStamp,NULL); //reset timer
+                    gettimeofday(&timeStampConn,NULL); //reset timer
                     int advancement = mod256sub(reqNum,seqNumBack);
                     packetNum += advancement; //increment the number for which packet we are trying to send
                     seqNumBack = reqNum;
                     seqOffset -= advancement;
                }
+          }
+          else if (result == 2 && pktBuf[0] == PACKET_END) //this situation happens when server has switched to send mode but client has not
+          {
+               fprintf(stderr, "sendto got END packet!\n");
+               int reqNum = pktBuf[1];
+               pktBuf[0] = PACKET_ACK;
+               pktBuf[1] = (reqNum +1) & 0xFF;
           }
           
           
@@ -143,6 +155,12 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, const struct sockadd
           if (timeDiff(&timeNow,&timeStamp) >= rdt_timeout)
           {
                fprintf(stderr, "sendto timeout! seqOffset was %d\n", seqOffset);
+               seqOffset = 0;
+          }
+          
+          if (timeDiff(&timeNow,&timeStampConn) >= rdt_connTimeout)
+          {
+               fprintf(stderr, "sendto connection timeout! at packet # %d of %d\n", packetNum, packetTot);
                seqOffset = 0;
           }
           
@@ -319,7 +337,10 @@ ssize_t rdt_recvfrom(int sockfd, void **buf, struct sockaddr *src_addr, socklen_
           
           //packet type
           if (packetType == PACKET_END)
+          {
+               fprintf(stderr, "recvfiltered got END packet\n");
                break;
+          }
           
           //if there is not enough space on the received message buffer, expand it
           if (allocLength - length < PACKETSIZE)
