@@ -91,12 +91,13 @@ int rdt_close(int sockfd);
      return close(sockfd);
 }
 
-ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen)
+ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, const struct sockaddr *dest_addr, socklen_t addrlen)
 {
      if (len == 0)
           return 0;
      long packetTot = (len-1) / (PACKETSIZE-2); //total number of data packets to be sent, minus 1
      int packetRemainder = ((len-1) % (PACKETSIZE-2) + 1);  //amount of data to be transmitted in the last packet
+     fprintf(stderr, "sendto got buffer length %d resulting in %d packets with last packet having size %d\n", len, packetTot, packetRemainder);
      long packetNum = 0;
      int seqNumBack = 0;
      int seqOffset = 0;
@@ -106,6 +107,8 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, int flags, const str
      char* pktBuf[PACKETSIZE];
      struct timeval timeStamp;
      struct timeval timeNow;
+     ssize_t result;
+     ssize_t sresult;
      
      gettimeofday(&timeStamp,NULL);
      while (1)
@@ -116,12 +119,14 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, int flags, const str
           {
                fprintf(stderr, "sendto got address mismatch\n");
                pktBuf[0] = PACKET_DNY;
-               sendto(sockfd, pktBuf, 1, 0, &recvaddr, recvaddrlen);
+               sresult = sendto(sockfd, pktBuf, 1, 0, &recvaddr, recvaddrlen);
+               if (sresult != 1)
+                    error("sendto encountered an error while sending DNY packet");
           }
           else if (result > 0 && pktBuf[0] == PACKET_ACK) //received ACK, update window
           {
                int reqNum = pktBuf[1];
-               fprintf(stderr, "sendto got ack # %d\n", reqNum);
+               fprintf(stderr, "sendto got ack # %d; current packet # is %d; current base is %d\n", reqNum, packetNum, seqNumBack);
                if (mod256LessThan(seqNumBack, reqNum))
                {
                     gettimeofday(&timeStamp,NULL); //reset timer
@@ -137,6 +142,7 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, int flags, const str
           //if timeout then mark all packets in the window as unsent
           if (timeDiff(&timeNow,&timeStamp) >= rdt_timeout)
           {
+               fprintf(stderr, "sendto timeout! seqOffset was %d\n", seqOffset);
                seqOffset = 0;
           }
           
@@ -148,30 +154,40 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, int flags, const str
                {
                     pktBuf[0] = PACKET_DAT;
                     pktBuf[1] = (seqNumBack + seqOffset) & 0xFF;
-                    if (packetNum == packetTot) //we are on the last packet
+                    
+                    fprintf(stderr, "sendto sending packet # %d with seq # %d\n", packetNum + seqOffset, pktBuf[1]);
+                    if (packetNum + seqOffset == packetTot) //we are on the last packet
                     {
                          memcpy(pktBuf + 2, bufC + (packetNum + seqOffset) * (PACKETSIZE-2), packetRemainder);
-                         sendto(sockfd, pktBuf, packetRemainder, 0, dest_addr, addrlen);
+                         sresult = sendto(sockfd, pktBuf, packetRemainder, 0, dest_addr, addrlen);
+                         if (sresult != packetRemainder)
+                              error("sendto encountered an error while sending DAT packet");
                     }
                     else
                     {
                          memcpy(pktBuf + 2, bufC + (packetNum + seqOffset) * (PACKETSIZE-2), PACKETSIZE-2);
-                         sendto(sockfd, pktBuf, PACKETSIZE-2, 0, dest_addr, addrlen);
+                         sresult = sendto(sockfd, pktBuf, PACKETSIZE-2, 0, dest_addr, addrlen);
+                         if (sresult != PACKETSIZE-2)
+                              error("sendto encountered an error while sending DAT packet");
                     }
                }   
           }
           else if (packetNum == packetTot + 1) //all packets have been sent and ACKed, now sending confirmation of END
           {
+               fprintf(stderr, "sendto sending END packet\n");
                if (seqOffset != rdt_window)
                {
                     pktBuf[0] = PACKET_END;
-                    sendto(sockfd, pktBuf, 1, 0, dest_addr, addrlen);
+                    sresult = sendto(sockfd, pktBuf, 1, 0, dest_addr, addrlen);
+                    if (sresult != PACKETSIZE-2)
+                         error("sendto encountered an error while sending END packet");
                }
                seqOffet = rdt_window;
           }
           else //ACK has been received for END, exit the function
                break;
      }
+     return len;
 }
 
 ssize_t lossyrecv(int sockfd, void *buf, int block, struct sockaddr *src_addr, socklen_t* addrlen)
@@ -221,9 +237,10 @@ ssize_t lossyrecv(int sockfd, void *buf, int block, struct sockaddr *src_addr, s
      }
 }
 
-ssize_t rdt_recvfiltered(int sockfd, void *buf, const struct sockaddr *src_addr, const socklen_t addrlen)
+ssize_t rdt_recvfrom(int sockfd, void **buf, struct sockaddr *src_addr, socklen_t *addrlen)
 {
      ssize_t result = 0;
+     ssize_t sresult;
      ssize_t allocLength = 4*PACKETSIZE;
      ssize_t length = 0;
      //ssize_t msgLength = 0;
@@ -238,11 +255,11 @@ ssize_t rdt_recvfiltered(int sockfd, void *buf, const struct sockaddr *src_addr,
      char* msgBuf = malloc(4*PACKETSIZE);
      char* pktBuf[PACKETSIZE];
      
-     if (src_addr != NULL && addrlen != 0)
+     if (*addrlen != 0)
      {
           cmpaddr.sa_family = src_addr->sa_family;
           cmpaddr.sa_data = src_addr->sa_data;
-          cmpaddrlen = addrlen;
+          cmpaddrlen = *addrlen;
      }
      
      while (1)
@@ -262,25 +279,23 @@ ssize_t rdt_recvfiltered(int sockfd, void *buf, const struct sockaddr *src_addr,
           //check that address is what we want, or if no desired address is specified, then accept the packet
           if (cmpaddrlen != 0)
           {
-               if (checkAddrMatch(&recvaddr, src_addr, &recvaddrlen, addrlen))
+               if (checkAddrMatch(&recvaddr, &cmpaddr, &recvaddrlen, &cmpaddrlen))
                {
                     fprintf(stderr, "recvfiltered got address mismatch\n");
                     reply[0] = PACKET_DNY;
-                    reply[1] = 0;
-                    sendto(sockfd, reply, 2, 0, &recvaddr, recvaddrlen);
+                    sresult = sendto(sockfd, reply, 1, 0, &recvaddr, recvaddrlen);
+                    if (sresult != 1)
+                         error("recvfiltered encountered an error while sending DNY packet");
                     continue;
                }
           }
           else if (packetType == PACKET_DAT)
           {
-               cmpaddr.sa_family = recvaddr.sa_family;
-               cmpaddr.sa_data = recvaddr.sa_data;
-               cmpaddrlen = addrlen;
+               src_addr->sa_family = cmpaddr.sa_family = recvaddr.sa_family;
+               src_addr->sa_data = cmpaddr.sa_data = recvaddr.sa_data;
+               *addrlen = cmpaddrlen = recvaddrlen;
           }
           
-          //packet type
-          if (packetType == PACKET_END)
-               break;
           
           int seqNum = pktBuf[1];
           
@@ -298,7 +313,13 @@ ssize_t rdt_recvfiltered(int sockfd, void *buf, const struct sockaddr *src_addr,
           //reply with ack
           reply[0] = PACKET_ACK;
           reply[1] = reqNum;
-          sendto(sockfd, reply, 2, 0, &recvaddr, recvaddrlen);
+          sresult = sendto(sockfd, reply, 2, 0, &recvaddr, recvaddrlen);
+          if (sresult != 2)
+               error("recvfiltered encountered an error while sending ACK packet");
+          
+          //packet type
+          if (packetType == PACKET_END)
+               break;
           
           //if there is not enough space on the received message buffer, expand it
           if (allocLength - length < PACKETSIZE)
@@ -314,5 +335,15 @@ ssize_t rdt_recvfiltered(int sockfd, void *buf, const struct sockaddr *src_addr,
           length += (result - 2);
      }
      
+     *buf = (void*)msgBuf;
      return length;
+}
+
+ssize_t rdt_requestReply(int sockfd, const void* buf, size_t len, void** recvbuf, int flags, const struct sockaddr* dest_addr, socklen_t addrlen)
+{
+     ssize_t result;
+     ssize_t rlen;
+     result = rdt_sendto(sockfd, buf, len, dest_addr, addrlen);
+     rlen = rdt_recvfrom(sockfd, *recvbuf, dest_addr, addrlen);
+     return rlen;
 }
