@@ -11,18 +11,19 @@
 #include <string.h>
 #include <sys/stat.h>
 
-extern int CORRUPTRATE;
-extern int LOSSRATE;
-
 //creates a UDP socket
-int rdt_socket();
+int rdt_socket(float corruptRate, float lossRate, int window);
+
+//closes socket
+int rdt_close(int sockfd);
 
 //implements sender side of GBN protocol
 ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
 
 //wrapper for recv function; separates received data into packets and then simulates packet loss/corruption
-//timeout should be based on poll function
-ssize_t lossyrecv(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t* addrlen);
+//timeout should be based on polling
+//assumes that buf is a least as large as maximum packet size
+ssize_t lossyrecv(int sockfd, void *buf, int block, struct sockaddr *src_addr, socklen_t* addrlen);
 
 //implements receiver side of GBN protocol. Does not return until entire message is received.
 ssize_t rdt_recvfrom(int sockfd, void *buf, int flags, struct sockaddr *src_addr, socklen_t* addrlen);
