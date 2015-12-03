@@ -344,6 +344,6 @@ ssize_t rdt_requestReply(int sockfd, const void* buf, size_t len, void** recvbuf
      ssize_t result;
      ssize_t rlen;
      result = rdt_sendto(sockfd, buf, len, dest_addr, addrlen);
-     rlen = rdt_recvfrom(sockfd, *recvbuf, dest_addr, addrlen);
+     rlen = rdt_recvfrom(sockfd, recvbuf, dest_addr, addrlen);
      return rlen;
 }
