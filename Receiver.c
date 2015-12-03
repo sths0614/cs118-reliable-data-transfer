@@ -40,8 +40,7 @@ int main(int argc, char* argv[])
     bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
     serv_addr.sin_port = htons(portNum);
 
-    // TODO!!!
-    int fsize = rdt_requestReply(sockfd, fname, size_t len, &fbuf, 
+    int fsize = rdt_requestReply(sockfd, fname, strlen(fname), &fbuf, 
     	(struct sockaddr*) serv_addr, sizeof(serv_addr));
 
     // close the socket
