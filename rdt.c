@@ -10,7 +10,6 @@
 #include <sys/stat.h>
 #include <errno.h>
 
-#define PACKETSIZE 1000;
 static char rdt_recvBuffer[2000];
 static char* rdt_sendBuffer;
 static ssize_t rdt_sendBufferSize;
@@ -39,6 +38,11 @@ int rdt_socket(float corruptRate, float lossRate, ssize_t window)
      int sock = socket(AF_INET, SOCK_DGRAM, 0);
      fcntl(sock, F_SETFL, O_NONBLOCK);
      return sock;
+}
+
+int rdt_bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+{
+     return bind(sockfd, addr, addrlen);
 }
 
 int rdt_close(int sockfd);
@@ -93,3 +97,89 @@ ssize_t lossyrecv(int sockfd, void *buf, int block, struct sockaddr *src_addr, s
      }
 }
 
+ssize_t rdt_recvfiltered(int sockfd, void *buf, const struct sockaddr *src_addr, const socklen_t addrlen)
+{
+     ssize_t result = 0;
+     ssize_t allocLength = 4*PACKETSIZE;
+     ssize_t length = 0;
+     //ssize_t msgLength = 0;
+     struct sockaddr recvaddr;
+     socklen_t recvaddrlen;
+     //int lengthObtained = 0;
+     int reqNum = 0;
+     int invalid_addr = 0;
+     char* msgBuf = malloc(4*PACKETSIZE);
+     char* pktBuf = malloc(PACKETSIZE);
+     char ackReply[2];
+     
+     while (1)
+     {
+          //wait for packet receive
+          invalid_addr = 0;
+          result = lossyrecv(sockfd, (void*)pktBuf, 1, &recvaddr, &recvaddrlen);
+          
+          if (result <= 0)
+          {
+               fprintf(stderr, "recvfiltered got packet with size 0\n");
+               continue;
+          }
+          
+          //check that address is what we want
+          int invalid_addr = 0;
+          if (!(recvaddr.sa_family == src_addr->sa_family && recvaddrlen == addrlen))
+          {
+               fprintf(stderr, "recvfiltered got packet with non-matching address family or address length\n");
+               invalid_addr = 1;
+               continue;
+          }
+          int addr_match = 1;
+          for (int i = 0; i < addrlen-sizeof(sa_family_t); i++)
+               if (recvaddr.sa_data[i] != src_addr->sa_data[i])
+                    addr_match = 0;
+          if (!addr_match)
+          {
+               fprintf(stderr, "recvfiltered got packet with non-matching address\n");
+               invalid_addr = 1;
+               continue;
+          }
+          
+          int seqNum = pktBuf[1];
+          
+          //get sequence number
+          if (reqNum == seqNum)
+          {
+               fprintf(stderr, "recvfiltered got packet with seqNum %d (correct)\n", seqNum);
+               reqNum++;
+          }
+          else
+          {
+               fprintf(stderr, "recvfiltered got packet with seqNum %d (incorrect)\n", seqNum);
+          }
+          
+          //reply with ack
+          ackReply[0] = 2;
+          ackReply[1] = reqNum;
+          sendto(sockfd, ackReply, 2, 0, src_addr, addrlen);
+          
+          
+          //if there is not enough space on the received message buffer, expand it
+          if (allocLength - length < PACKETSIZE)
+          {
+               allocLength += allocLength/2;
+               msgBuf = realloc(msgBuf, allocLength);
+               if (msgBuf == NULL)
+                    error("recvfiltered ran out of memory while expanding the message buffer!");
+          }
+          
+          //copy packet contents to buffer
+          memcpy((void*)msgBuf + length, (void*)pktBuf + 2, result - 2);
+          length += (result - 2);
+          
+          //determine if packet is the last packet in the sequence
+          int packetType = pktBuf[0];
+          if (packetType == PACKET_END)
+               break;
+     }
+     
+     return length;
+}
