@@ -1,4 +1,4 @@
-#include "rdt.c"
+#include "rdt.h"
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -33,7 +33,7 @@ int main(int argc, char* argv[])
 	if (pLoss < 0.0 || pLoss > 1.0 || pCorrupt < 0.0 || pCorrupt > 1.0)
 		error("ERROR: probabilities need to be between 0.0 and 1.0");
 
-	sockfd = rdt_socket(pCorrupt, pLoss, winSize, 100000, 5000000);
+	sockfd = rdt_socket(pCorrupt, pLoss, winSize, 10000, 5000000);
 	if (sockfd < 0)
 		error ("ERROR from rdt_socket()");
 	bzero((char *) &serv_addr, sizeof(serv_addr));
@@ -47,23 +47,47 @@ int main(int argc, char* argv[])
      //only one connection at a time
      while(1)
      {
+          struct sockaddr cli_addr;
           socklen_t cli_addrlen = 0;
-          rdt_recvfrom(sockfd, &fname, (struct sockaddr*) &cli_addr, &cli_addrlen);
+          ssize_t fnameLen = rdt_recvfrom(sockfd, (void**)&fname, (struct sockaddr*) &cli_addr, &cli_addrlen);
           // rdt_recvfrom(sockfd, &fname, (struct sockaddr*) &cli_addr, 0);
-
-          // open file, get filesize
+          
+          fname[fnameLen] = '\0';
+          
+          if (fnameLen == 0)
+          {
+               fprintf(stderr, "Received request with length 0; Shutting down\n");
+          }
+          else
+          {
+               fprintf(stderr, "Received request for %s\n", fname);
+          }
+          
+          fprintf(stderr, "Opening %s\n", fname);
           FILE* f = fopen(fname, "rb");
-          fseek(f, 0L, SEEK_END);
-          int fsize = (int) ftell(f);
-          fseek(f, 0L, SEEK_SET);
-          printf("Filesize is %d\n", fsize);
-
-          // read the file into fbuf
-          char* fbuf = (char *)malloc(fsize*sizeof(char));
-          fread(fbuf, 1, fsize, f);
-
-          // close file
-          fclose(f);
+          int fsize;
+          char* fbuf;
+          if (f)
+          {
+               fprintf(stderr, "File exists\n");
+               // open file, get filesize
+               fseek(f, 0L, SEEK_END);
+               fsize = (int) ftell(f);
+               fseek(f, 0L, SEEK_SET);
+               printf("Filesize is %d\n", fsize);
+               
+               // read the file into fbuf
+               fbuf = (char *)malloc(fsize*sizeof(char));
+               fread(fbuf, 1, fsize, f);
+               
+               // close file
+               fclose(f);
+          }
+          else
+          {
+               fsize = 0;
+               fbuf = NULL;
+          }
 
           // Send the file!
           rdt_sendto(sockfd, fbuf, fsize, (struct sockaddr*) &cli_addr, cli_addrlen);
