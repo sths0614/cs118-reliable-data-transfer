@@ -85,7 +85,8 @@ int main(int argc, char* argv[])
           }
           else
           {
-               fsize = 0;
+               fprintf(stderr, "File does not exist!\n");
+               fsize = -1;
                fbuf = NULL;
           }
 

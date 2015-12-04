@@ -121,13 +121,24 @@ ssize_t rdt_sendto(int sockfd, const void *buf, size_t len, const struct sockadd
           dest_addr->sa_data[6] & 0xFF,
           dest_addr->sa_data[7] & 0xFF
      );
-     long packetTot = (len-1) / (PACKETSIZE-2); //total number of data packets to be sent, minus 1
-     int packetRemainder = ((len-1) % (PACKETSIZE-2) + 1);  //amount of data to be transmitted in the last packet
+     long packetTot;
+     int packetRemainder;
      
      if (len == 0)
      {
+          packetTot = 0;
+          packetRemainder = 0;
+     }
+     else if (len == (size_t)(-1))
+     {
+          len = 0;
           packetTot = -1;
           packetRemainder = 0;
+     }
+     else
+     {
+          packetTot = (len-1) / (PACKETSIZE-2); //total number of data packets to be sent, minus 1
+          packetRemainder = ((len-1) % (PACKETSIZE-2) + 1);  //amount of data to be transmitted in the last
      }
      
      fprintf(stderr, "sendto got buffer length %d resulting in %ld plus 1 packets with last packet having size %d\n", len, packetTot, packetRemainder);
@@ -381,6 +392,7 @@ ssize_t rdt_recvfrom(int sockfd, void **buf, struct sockaddr *src_addr, socklen_
      char reply[2];
      char* msgBuf = malloc(4*PACKETSIZE);
      char pktBuf[PACKETSIZE];
+     int datReceived = 0;
      
      if (*addrlen != 0)
      {
@@ -460,6 +472,10 @@ ssize_t rdt_recvfrom(int sockfd, void **buf, struct sockaddr *src_addr, socklen_
                *addrlen = cmpaddrlen = recvaddrlen;
           }
           
+          if (packetType == PACKET_DAT)
+          {
+               datReceived = 1;
+          }
           
           int seqNum = pktBuf[1];
           
@@ -520,7 +536,10 @@ ssize_t rdt_recvfrom(int sockfd, void **buf, struct sockaddr *src_addr, socklen_
           }
      }
      
-     *buf = (void*)msgBuf;
+     if (datReceived)
+          *buf = (void*)msgBuf;
+     else
+          *buf = NULL;
      fprintf(stderr, "recvfiltered exit\n");
      return length;
 }

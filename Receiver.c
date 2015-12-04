@@ -71,10 +71,18 @@ int main(int argc, char* argv[])
      if (rdt_close(sockfd) < 0)
      error ("ERROR from rdt_close()");
 
-     // write buffer to file
-     FILE* f = fopen(fname, "wb");
-     fwrite(fbuf, 1, fsize, f);
-     fclose(f);
+     if (fbuf)
+     {
+          fprintf(stderr, "Writing file\n");
+          // write buffer to file
+          FILE* f = fopen(fname, "wb");
+          fwrite(fbuf, 1, fsize, f);
+          fclose(f);
+     }
+     else
+     {
+          fprintf(stderr, "File not found on server\n");
+     }
      
      // free buffer
      free(fbuf);
